@@ -22,6 +22,7 @@ u32 constexpr MAX_DESCRIPTORS = 10;
 u32 constexpr MAX_RENDER_COMMANDS = 10;
 u32 constexpr MAX_TRANSFORMS = 5000;
 u32 constexpr MAX_MATERIALS = 100;
+u32 constexpr FONT_PADDING = 2;
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL vk_debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT msgSeverity,
@@ -34,10 +35,31 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL vk_debug_callback(
     return false;
 }
 
+struct Glyph
+{
+    Vec2 size;
+    float topV;
+    float bottomV;
+    float leftU;
+    float rightU;
+    float xOff;
+    float yOff;
+};
+
+struct GlyphCache
+{
+    u32 fontSize;
+    u32 fontBitmapWidth;
+    u32 fontBitmapHeight;
+    Glyph glyphs[255];
+};
+
 struct VkContext
 {
     bool vSync;
     VkExtent2D screenSize;
+
+    GlyphCache glyphCache;
 
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger;
@@ -92,12 +114,18 @@ struct VkContext
 };
 
 Image *vk_create_image(VkContext *vkcontext, ImageID imageID, 
-                        u8* data, u32 width, u32 height)
+                        char* data, u32 width, u32 height, 
+                        VkFormat format = VK_FORMAT_R8G8B8A8_UNORM)
 {
     Image *image = 0;
     if (vkcontext->imageCount < MAX_IMAGES)
     {
-        u32 textureSize = width * height * 4;
+        u32 textureSize = width * height;
+        if(format == VK_FORMAT_R8G8B8A8_UNORM)
+        {
+            textureSize *= 4;
+        }
+
         vk_copy_to_buffer(&vkcontext->stagingBuffer, data, textureSize);
 
         //TODO: Assertions
@@ -106,7 +134,8 @@ Image *vk_create_image(VkContext *vkcontext, ImageID imageID,
                                    vkcontext->gpu,
                                    width,
                                    height,
-                                   VK_FORMAT_R8G8B8A8_UNORM);
+                                   format);
+        image->ID = imageID;
 
         if (image->image != VK_NULL_HANDLE && image->memory != VK_NULL_HANDLE)
         {
@@ -165,7 +194,7 @@ Image *vk_create_image(VkContext *vkcontext, ImageID imageID,
                 VkImageViewCreateInfo viewInfo = {};
                 viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
                 viewInfo.image = image->image;
-                viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+                viewInfo.format = format;
                 viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 viewInfo.subresourceRange.layerCount = 1;
                 viewInfo.subresourceRange.levelCount = 1;
@@ -188,6 +217,11 @@ Image *vk_create_image(VkContext *vkcontext, ImageID imageID,
     else
     {
         CAKEZ_ASSERT(0, "Reached Maximum amount of Images");
+    }
+
+    if(image)
+    {
+        vkcontext->imageCount++;
     }
 
     return image;
@@ -311,7 +345,6 @@ internal RenderCommand *vk_add_render_command(VkContext *vkcontext, Descriptor *
         rc = &vkcontext->renderCommands[vkcontext->renderCommandCount++];
         *rc = {};
         rc->desc = desc;
-        rc->pushData.transformIdx = vkcontext->transformCount;
     }
     else
     {
@@ -348,62 +381,45 @@ internal u32 get_material_idx(VkContext*vkcontext, Vec4 color)
 internal void vk_add_transform(
     VkContext *vkcontext,
     ImageID imageID,
-    Vec4 color,
     Vec2 pos,
-    u32 animationIdx = 0)
+    Vec2 size,
+    Vec4 color,
+    u32 animationIdx)
 {
     if (vkcontext->transformCount < MAX_TRANSFORMS)
     {
-        // TODO: When I have Font
-        // u32 materialIdx = get_material_idx(vkcontext, color);
-        // Texture texture = get_texture(assetTypeID);
+        u32 materialIdx = get_material_idx(vkcontext, color);
 
-        // u32 cols = texture.size.x / texture.subSize.x;
-        // u32 rows = texture.size.y / texture.subSize.y;
+        Transform t = {};
+        t.materialIdx = materialIdx;
+        t.imageID = imageID;
+        t.xPos = pos.x;
+        t.yPos = pos.y;
+        t.sizeX = size.x;
+        t.sizeY = size.y;
+        t.animationIdx = animationIdx;
 
-        // float uvWidth = 1.0f / (float)cols;
-        // float uvHeight = 1.0f / (float)rows;
+        if(imageID == IMAGE_ID_FONT)
+        {
+            Glyph g = vkcontext->glyphCache.glyphs[animationIdx];
+            t.topV = g.topV;
+            t.bottomV = g.bottomV;
+            t.leftU = g.leftU;
+            t.rightU = g.rightU;
+        }
+        else
+        {
+            t.topV = 0.0f;
+            t.bottomV = 1.0f;
+            t.leftU = 0.0f;
+            t.rightU = 1.0f;
+        }
 
-        // Transform t = {};
-        // t.materialIdx = materialIdx;
-        // t.xPos = pos.x;
-        // t.yPos = pos.y;
-        // t.sizeX = texture.subSize.x;
-        // t.sizeY = texture.subSize.y;
-        // t.topV = (float)(animationIdx / cols) * uvHeight;
-        // t.bottomV = t.topV + uvHeight;
-        // t.leftU = (float)(animationIdx % cols) * uvWidth;
-        // t.rightU = t.leftU + uvWidth;
-        // t.animationIdx = animationIdx;
-
-        // vkcontext->transforms[vkcontext->transformCount++] = t;
+        vkcontext->transforms[vkcontext->transformCount++] = t;
     }
     else
     {
         CAKEZ_ASSERT(0, "Reached maximum amount of transforms!");
-    }
-}
-
-void vk_render_text(
-    VkContext *vkcontext,
-    const u8 *text,
-    Vec2 origin)
-{
-    while (u8 c = *(text++))
-    {
-        //TODO: Look at the next Word until ' ', change color based on which Word it is
-
-        if (c == ' ')
-        {
-            origin.x += 15.0f;
-            continue;
-        }
-
-        // TODO: Implement
-        // vk_add_transform(vkcontext, gameState, ASSET_SPRITE_FONT_ATLAS, 
-        //                 {1.0f, 1.0f, 1.0f, 1.0f}, origin, c);
-
-        origin.x += 15.0f;
     }
 }
 
@@ -427,6 +443,7 @@ internal void vk_create_swapchain_objects(
         scInfo.preTransform = surfaceCaps.currentTransform;
         scInfo.imageExtent = surfaceCaps.currentExtent;
         scInfo.minImageCount = imgCount;
+        scInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR; // This is guaranteed to be supported
         scInfo.imageArrayLayers = 1;
 
         VK_CHECK(vkCreateSwapchainKHR(vkcontext->device, &scInfo, 0, &vkcontext->swapchain));
@@ -508,6 +525,84 @@ internal void vk_resize_swapchain(
 
         vk_create_swapchain_objects(vkcontext, vSync);
     }
+}
+
+#define STB_TRUETYPE_IMPLEMENTATION
+#include "stb_truetype.h"
+
+internal void vk_init_font(VkContext*vkcontext, char* bitmap, 
+                        u32 imgWidth, u32 fontSize)
+{
+    vkcontext->glyphCache.fontSize = fontSize;
+    vkcontext->glyphCache.fontBitmapWidth = imgWidth;
+    vkcontext->glyphCache.fontBitmapHeight = imgWidth;
+
+    u32 fileSize;
+    char* buffer = platform_read_file("fonts/arial.ttf", &fileSize);
+
+    stbtt_fontinfo font;
+    stbtt_InitFont(&font, (unsigned char*)buffer, 0);
+
+    memset(bitmap, 0, imgWidth * imgWidth);
+
+    float scaleY;
+    scaleY = stbtt_ScaleForPixelHeight(&font, fontSize);
+
+    u32 glyphRowCount = 0;
+    u32 bitmapColIdx = FONT_PADDING;
+    s32 width, height, xOff, yOff;
+
+    for(unsigned char c = 0; c < 127; c++)
+    {
+        unsigned char* glyphBitmap = 0;
+
+        // This allocates on the Heap
+        glyphBitmap = stbtt_GetCodepointBitmap(&font, 0, scaleY, c, &width, &height, &xOff, &yOff);
+
+        Glyph* glyph = &vkcontext->glyphCache.glyphs[c];
+        glyph->size = {(float)width + FONT_PADDING, (float)height + FONT_PADDING};
+        glyph->xOff = xOff;
+        glyph->yOff = yOff;
+
+
+        if(bitmapColIdx + FONT_PADDING + width >= imgWidth)
+        {
+            glyphRowCount++;
+            bitmapColIdx = 0;
+        }
+
+        u32 bitmapRowIdx = (glyphRowCount * fontSize + FONT_PADDING);
+
+        // Write the glyph to the grayscale image
+        u32 startBitmapIdx = bitmapRowIdx * imgWidth + bitmapColIdx;
+        for (u32 y = 0; y < height; y++)
+        {
+            for (u32 x = 0; x < width; x++)
+            {
+                unsigned char glyphC = glyphBitmap[y * width + x];
+
+                u32 subIdx = startBitmapIdx + y * imgWidth + x;
+                bitmap[subIdx] = glyphC;
+            }
+        }
+
+        // Calculate the UV Coordinates of the Glyph
+        {
+            int bitmapRowIdxGlyph = bitmapRowIdx - FONT_PADDING / 2;
+            int glyphHeight = height + FONT_PADDING; // 2 * FONT_PADDING / 2
+            int bitmapColIdxGlyph = bitmapColIdx - FONT_PADDING / 2;
+            int glyphWidth = width + FONT_PADDING; // 2 * FONT_PADDING / 2
+            glyph->topV = (float)bitmapRowIdxGlyph / (float)imgWidth;
+            glyph->bottomV = float(bitmapRowIdxGlyph + glyphHeight) / (float)imgWidth;
+            glyph->leftU = (float)bitmapColIdxGlyph / (float)imgWidth;
+            glyph->rightU = float(bitmapColIdxGlyph + glyphWidth) / (float)imgWidth;
+        }
+
+        bitmapColIdx += FONT_PADDING + width;
+    }
+
+    vk_create_image(vkcontext, IMAGE_ID_FONT, bitmap, 
+                    imgWidth, imgWidth, VK_FORMAT_R8_UNORM);
 }
 
 bool vk_init(VkContext *vkcontext, void *window, bool vSync)
@@ -878,7 +973,7 @@ bool vk_init(VkContext *vkcontext, void *window, bool vSync)
     {
         u8 white[] ={255, 255, 255, 255};
 
-        Image *image = vk_create_image(vkcontext, IMAGE_ID_WHITE, white, 1, 1);
+        Image *image = vk_create_image(vkcontext, IMAGE_ID_WHITE, (char*)white, 1, 1);
 
         if (!image->memory || !image->image || !image->view)
         {
@@ -970,13 +1065,92 @@ bool vk_init(VkContext *vkcontext, void *window, bool vSync)
     return true;
 }
 
-bool vk_render(VkContext *vkcontext, InputState* input)
+internal void vk_draw_rect(VkContext* vkcontext, ImageID imageID,
+        Vec2 pos, Vec2 size, Vec4 color = {1.0f, 1.0f, 1.0f, 1.0f}, u32 animationIdx = 0)
+{
+    vk_add_transform(vkcontext, imageID, pos, size, color, animationIdx);
+}
+
+internal Vec2 vk_render_text(VkContext* vkcontext, unsigned char* text, Vec2 origin)
+{
+    float originalOriginX = origin.x;
+    while(unsigned char c = *(text++))
+    {
+        Glyph g = vkcontext->glyphCache.glyphs[c];
+        switch(c)
+        {
+            case ' ':
+            origin.x += vkcontext->glyphCache.fontSize / 2;
+            break;
+
+            case '\n':
+            case '\r':
+            origin.y += vkcontext->glyphCache.fontSize;
+            origin.x = originalOriginX;
+            break;
+
+            default:
+                vk_draw_rect(vkcontext, IMAGE_ID_FONT, 
+                            origin + Vec2{g.xOff, g.yOff}, 
+                            g.size, {1.0f, 1.0f, 1.0f, 1.0f}, c);
+
+                origin.x += g.size.x;
+        }
+    }
+    return origin;
+}
+
+
+bool vk_render(VkContext *vkcontext, InputState* input, AppState* app)
 {
     u32 imgIdx;
 
     // We wait on the GPU to be done with the work
     VK_CHECK(vkWaitForFences(vkcontext->device, 1, &vkcontext->imgAvailableFence, 
                                 VK_TRUE, UINT64_MAX));
+
+    float fontSize = (float)vkcontext->glyphCache.fontSize;
+    Vec2 origin = vk_render_text(vkcontext, app->buffer, {40.0f, 40.0f});
+    vk_draw_rect(vkcontext, IMAGE_ID_WHITE, origin + Vec2{0.0f, -fontSize * 0.8f}, 
+        {fontSize / 2.0f, fontSize},
+        {1.0f, 1.0f, 1.0f, 0.5f});
+
+    Descriptor *currentDesc = 0;
+    RenderCommand *rc = 0;
+    for(uint32_t transformIdx = 0; transformIdx < vkcontext->transformCount; transformIdx++)
+    {
+        Transform* t = &vkcontext->transforms[transformIdx];
+
+        Descriptor *desc = vk_get_descriptor(vkcontext, (ImageID)t->imageID);
+        if(!desc)
+        {
+            desc = vk_create_descriptor(vkcontext, (ImageID)t->imageID);
+        }
+
+        if(desc) 
+        {
+            if(currentDesc != desc)
+            {
+                currentDesc = desc;
+                rc = vk_add_render_command(vkcontext, desc);
+                rc->pushData.transformIdx = transformIdx;
+
+                if (rc)
+                {
+                    rc->instanceCount = 1;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            else
+            {
+                rc->instanceCount++;
+            }
+        }
+    }
+
 
     // // UI Rendering
     // {
@@ -1079,26 +1253,26 @@ bool vk_render(VkContext *vkcontext, InputState* input)
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    // vkCmdBindIndexBuffer(cmd, vkcontext->indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-    // vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkcontext->pipeline);
+    vkCmdBindIndexBuffer(cmd, vkcontext->indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkcontext->pipeline);
 
-    // // Render Loop
-    // {
-    //     for (u32 i = 0; i < vkcontext->renderCommandCount; i++)
-    //     {
-    //         RenderCommand *rc = &vkcontext->renderCommands[i];
+    // Render Loop
+    {
+        for (u32 i = 0; i < vkcontext->renderCommandCount; i++)
+        {
+            RenderCommand *rc = &vkcontext->renderCommands[i];
 
-    //         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkcontext->pipeLayout,
-    //                                 0, 1, &rc->desc->set, 0, 0);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vkcontext->pipeLayout,
+                                    0, 1, &rc->desc->set, 0, 0);
 
-    //         vkCmdPushConstants(cmd, vkcontext->pipeLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushData), &rc->pushData);
+            vkCmdPushConstants(cmd, vkcontext->pipeLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushData), &rc->pushData);
 
-    //         vkCmdDrawIndexed(cmd, 6, rc->instanceCount, 0, 0, 0);
-    //     }
+            vkCmdDrawIndexed(cmd, 6, rc->instanceCount, 0, 0, 0);
+        }
 
-    //     // Reset the Render Commands for next Frame
-    //     vkcontext->renderCommandCount = 0;
-    // }
+        // Reset the Render Commands for next Frame
+        vkcontext->renderCommandCount = 0;
+    }
 
     vkCmdEndRenderPass(cmd);
 

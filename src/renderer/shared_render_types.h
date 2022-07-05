@@ -22,6 +22,7 @@ struct Transform
     float rightU;
     int materialIdx;
     int animationIdx;
+    int imageID;
     // Padding??
 };
 

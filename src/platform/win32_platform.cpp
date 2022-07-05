@@ -7,11 +7,14 @@
 // Math
 #include "my_math.cpp"
 
+// App
+#include "app/app.cpp"
+
 // Memory
 #include "memory.h"
 
 // Input
-#include "input.h"
+#include "input.cpp"
 
 // Platform layer
 #include <windows.h>
@@ -268,6 +271,7 @@ internal void platform_update_window()
 global_variable LARGE_INTEGER ticksPerSecond;
 u32 constexpr FILE_IO_BUFFER_SIZE = MB(1);
 global_variable char *fileIOBuffer;
+global_variable char *fontAtlasBuffer;
 
 s32 main (){
     running = true;
@@ -308,10 +312,27 @@ s32 main (){
         return -1;
     }
 
+    fontAtlasBuffer = (char *)allocate_memory(&gameMemory, MB(1));
+    if (!fontAtlasBuffer)
+    {
+        CAKEZ_FATAL("Failed to allocate memory to Upload the font Atlas");
+        return -1;
+    }
+    vk_init_font(vkcontext, fontAtlasBuffer, 512, 42);
+
+    AppState* app = (AppState*)allocate_memory(&gameMemory, sizeof(AppState));
+    if (!app)
+    {
+        CAKEZ_FATAL("Failed to allocate memory for the AppState");
+        return -1;
+    }
+    memset(app->buffer, 0, 1000);
+
     while(running)
     {
         platform_update_window();
-        vk_render(vkcontext, input);
+        update_app(app, input);
+        vk_render(vkcontext, input, app);
     }
 
     return 0;

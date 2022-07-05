@@ -28,8 +28,6 @@ struct InputState
 };
 
 // TODO: Think about how to handle keys and actions
-// TODO: IE -> F11 -> make window fullscreen (toggle_fullscreen 4coder)
-// bool key_pressed_this_frame(InputState *input, KeyType keyType);
-// bool key_released_this_frame(InputState *input, KeyType keyType);
-
-// bool key_is_down(InputState *input, KeyType keyType);
+bool key_pressed_this_frame(InputState *input, s32 keyType);
+bool key_released_this_frame(InputState *input, s32 keyType);
+bool key_is_down(InputState *input, s32 keyType);
